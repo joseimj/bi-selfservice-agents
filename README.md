@@ -139,6 +139,6 @@ En el frontend A2UI, los pasos 1–2 son un **wizard interactivo** (selects de e
 - **"Environment variable 'GOOGLE_CLOUD_PROJECT' is reserved"** → Agent Engine la setea él mismo; por eso usamos `VERTEXAI_PROJECT`/`VERTEXAI_LOCATION`.
 - **El AgentCard de un especialista anuncia localhost** → revisa `PUBLIC_URL` en la revisión de Cloud Run.
 
-## Licencia
+## Autor
 
-MIT.
+Jose Maldonado
