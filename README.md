@@ -1,8 +1,8 @@
-# looker-selfservice-agents
+# Bi-selfservice-agents
 
 **Autoservicio analítico de siguiente nivel: un sistema multi-agente (ADK + A2A + A2UI) que CREA dashboards nativos en Looker desde lenguaje natural, desplegable end-to-end con Terraform en GCP y registrado en Gemini Enterprise.**
 
-Inspirado en [hendrixtlan/gemini_looker](https://github.com/hendrixtlan/gemini_looker), pero da el salto de *renderizar* dashboards a *construirlos*: el resultado de cada conversación es un dashboard user-defined real en Looker (tiles con queries, filtros cross-tile, layout), editable y gobernado por LookML.
+Da el salto de *renderizar* dashboards a *construirlos*: el resultado de cada conversación es un dashboard user-defined real en Looker (tiles con queries, filtros cross-tile, layout), editable y gobernado por LookML.
 
 ---
 
