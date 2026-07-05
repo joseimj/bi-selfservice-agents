@@ -1,0 +1,28 @@
+# Copia a terraform.tfvars y rellena. NO subas terraform.tfvars a git.
+
+project_id          = "YOUR_PROJECT_ID"
+project_number      = "YOUR_PROJECT_NUMBER"
+region              = "us-central1"
+staging_bucket_name = "YOUR_STAGING_BUCKET"
+
+# ---- Looker ----
+looker_base_url         = "https://your-instance.looker.com"
+looker_client_id        = "YOUR_LOOKER_CLIENT_ID"
+looker_client_secret    = "YOUR_LOOKER_CLIENT_SECRET"
+looker_models           = "[\"thelook\"]"
+looker_target_folder_id = "" # folder compartido donde el builder crea dashboards
+
+# ---- Gemini Enterprise ----
+ge_app_id   = "YOUR_GE_APP_ID"
+ge_location = "us" # global | us | eu
+
+# ---- Modelo intercambiable ----
+agent_model_provider = "claude" # gemini | claude | claude_native | anthropic
+gemini_model         = "gemini-2.5-flash"
+claude_model         = "claude-sonnet-4-6"
+claude_location      = "us-east5"
+# anthropic_api_key  = "sk-ant-..." # solo si provider = anthropic
+
+# ---- A2UI ----
+a2ui_enabled                    = true
+deploy_orchestrator_a2a_surface = true

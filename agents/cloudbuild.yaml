@@ -1,0 +1,18 @@
+# Build de la imagen de UN agente. El contexto es agents/ completo
+# (incluye common/) y el Dockerfile vive en <agente>/Dockerfile.
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - "-f"
+      - "${_AGENT}/Dockerfile"
+      - "-t"
+      - "${_REGISTRY}/${_AGENT}:latest"
+      - "."
+images:
+  - "${_REGISTRY}/${_AGENT}:latest"
+substitutions:
+  _AGENT: catalog_agent
+  _REGISTRY: ""
+options:
+  logging: CLOUD_LOGGING_ONLY
