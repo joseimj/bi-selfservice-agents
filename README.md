@@ -1,8 +1,10 @@
-# Bi-selfservice-agents
+# bi-selfservice-agents
+
+**Español** | [English](README.en.md) | [Français](README.fr.md) | [Português](README.pt.md)
 
 **Autoservicio analítico de siguiente nivel: un sistema multi-agente (ADK + A2A + A2UI) que CREA dashboards nativos en Looker desde lenguaje natural, desplegable end-to-end con Terraform en GCP y registrado en Gemini Enterprise.**
 
-Da el salto de *renderizar* dashboards a *construirlos*: el resultado de cada conversación es un dashboard user-defined real en Looker (tiles con queries, filtros cross-tile, layout), editable y gobernado por LookML.
+El salto frente al patrón habitual de «agente que renderiza imágenes»: aquí el resultado de cada conversación es un dashboard user-defined real en Looker (tiles con queries, filtros cross-tile, layout), editable y gobernado por LookML.
 
 ---
 
@@ -90,6 +92,7 @@ terraform/
     └── register_agent.sh      # registro en Gemini Enterprise (Discovery Engine API)
 
 frontend/README.md       # cómo conectar un renderer A2UI (Lit/Angular/Flutter/CopilotKit)
+docs/                    # prerrequisitos para aprobación (cliente/proveedor)
 ```
 
 ---
@@ -101,6 +104,8 @@ frontend/README.md       # cómo conectar un renderer A2UI (Lit/Angular/Flutter/
 - **Embed SSO habilitado** en Looker (Admin → Embed) para los links interactivos.
 - Una app de **Gemini Enterprise** creada (necesitas su `AS_APP` id).
 - Para rutas Claude: modelo habilitado en **Vertex AI Model Garden** (o `ANTHROPIC_API_KEY` para la ruta `anthropic`).
+
+El detalle completo, organizado por equipo responsable y con hoja de firmas, está en `docs/prerrequisitos_looker_selfservice_agents.docx`.
 
 ## Despliegue
 
@@ -114,7 +119,7 @@ terraform apply
 
 Orden que resuelve Terraform: APIs → SA/IAM → bucket → secretos → build de imágenes (Cloud Build) → 3 Cloud Run internos → superficie A2A del orquestador → empaquetado + Reasoning Engine → registro en GE (`register_agent.sh`).
 
-> **Avisos honestos (los mismos que el repo de referencia, y aplican aquí):**
+> **Avisos honestos:**
 > 1. `google_vertex_ai_reasoning_engine` es reciente en `google-beta`: verifica los nombres anidados de `spec` contra la versión de tu provider. Si tu versión aún no soporta el empaquetado de fuente ADK, usa `scripts/deploy_agent_engine.py` (mismo end state) y pasa el engine id a `register_agent.sh`.
 > 2. El registro en GE **no es idempotente** (no hay recurso nativo aún): re-aplicar puede duplicar el agente.
 > 3. Los pins de `requirements.txt` son de referencia: fija las versiones exactas que valides en tu build para que build y runtime coincidan.
