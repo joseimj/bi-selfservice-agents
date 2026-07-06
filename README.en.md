@@ -2,70 +2,132 @@
 
 [Español](README.md) | **English** | [Français](README.fr.md) | [Português](README.pt.md)
 
-**Next-level analytics self-service: a multi-agent system (ADK + A2A + A2UI) that CREATES native Looker dashboards from natural language, deployable end-to-end with Terraform on GCP and registered in Gemini Enterprise.**
+A multi-agent system for analytics self-service on Looker. Starting from a natural-language request, the agents discover the semantic model (LookML), propose a dashboard specification, build it as native Looker content through its API, and deliver it visually verified. It is built on ADK (Agent Development Kit), communicates internally over the A2A protocol, exposes generative UI through A2UI, and deploys end-to-end with Terraform on Google Cloud, with registration in Gemini Enterprise.
 
-The leap beyond the usual "agent that renders images" pattern: here, the outcome of every conversation is a real user-defined dashboard in Looker (tiles with queries, cross-tile filters, layout), editable and governed by LookML.
+## Contents
+
+1. [Context and scope](#1-context-and-scope)
+2. [Architecture](#2-architecture)
+3. [Protocols: A2A and A2UI](#3-protocols-a2a-and-a2ui)
+4. [Design decisions](#4-design-decisions)
+5. [Security and governance](#5-security-and-governance)
+6. [Repository structure](#6-repository-structure)
+7. [Configuration](#7-configuration)
+8. [Prerequisites](#8-prerequisites)
+9. [Deployment](#9-deployment)
+10. [Example flow](#10-example-flow)
+11. [Operations and troubleshooting](#11-operations-and-troubleshooting)
+12. [Planned evolution](#12-planned-evolution)
 
 ---
 
-## Architecture
+## 1. Context and scope
 
+The first generation of conversational agents on BI platforms solves the *query*: they answer point questions and, at best, render a visualization as an image inside the chat. That pattern leaves the real self-service bottleneck untouched: the **creation of analytical content** still depends on the BI team, with request queues for every new dashboard or every variation of an existing one.
+
+This project moves the frontier: the outcome of a conversation is not an ephemeral answer but a **persistent, governed artifact** — a real user-defined dashboard in Looker, with query-backed tiles, cross-tile filters, and a defined layout, which the user can open, edit, and share with the same guarantees as any hand-crafted content. Governance is not relaxed: everything the agents build goes through the LookML semantic layer, which remains the single source of metric and dimension definitions.
+
+**In scope:** semantic catalog discovery, dashboard creation and editing (tiles, filters, layout), visual verification, delivery with signed links, two consumption surfaces (Gemini Enterprise and a custom A2UI frontend).
+**Out of scope (see [Planned evolution](#12-planned-evolution)):** LookML authoring, alerts and schedules, other BI backends.
+
+## 2. Architecture
+
+```mermaid
+flowchart TB
+    GE["Gemini Enterprise<br/>text + inline images (artifacts) + SSO links"]
+    FE["A2UI frontend<br/>(Lit / Angular / Flutter)"]
+    ORQ["Orchestrator · ADK LlmAgent<br/>Vertex AI Agent Engine<br/>swappable model: gemini · claude · claude_native · anthropic"]
+
+    GE -- "Surface 1 (employees)" --> ORQ
+    FE <-->|"Surface 2 · A2A + A2UI<br/>(DataPart application/json+a2ui)"| ORQ
+
+    subgraph ESP["Specialists · Cloud Run · internal ingress · AgentCard at /.well-known/agent-card.json"]
+        CAT["Catalog Agent<br/>models, explores,<br/>fields, previews"]
+        BLD["Builder Agent<br/>dashboards, tiles,<br/>filters, 24-col layout"]
+        RND["Render Agent<br/>inline PNG,<br/>SSO embed URL"]
+    end
+
+    ORQ -- "A2A (JSON-RPC/HTTP)" --> CAT
+    ORQ -- "A2A" --> BLD
+    ORQ -- "A2A" --> RND
+
+    LKR["Looker API<br/>LookML semantic layer = governance"]
+    CAT -- "Looker SDK 4.0" --> LKR
+    BLD -- "Looker SDK 4.0" --> LKR
+    RND -- "Looker SDK 4.0" --> LKR
 ```
-                         ┌────────────────────────────┐
-   Surface 1             │      Gemini Enterprise      │  text + inline images
-   (employees)           └──────────────┬─────────────┘  (artifacts) + SSO links
-                                        │
-                          ┌─────────────▼──────────────┐
-                          │  Vertex AI Agent Engine     │
-                          │  ORCHESTRATOR (ADK LlmAgent)│  swappable model:
-                          │  looker_selfservice_        │  gemini | claude |
-                          │  orchestrator               │  claude_native | anthropic
-                          └───────┬──────────┬─────────┘
-   Surface 2                      │   A2A    │   A2A (AgentCards at
-   (custom frontend)              │ (JSON-RPC│    /.well-known/agent-card.json)
- ┌──────────────────┐             │  /HTTP)  │
- │ A2UI frontend    │   A2A +     │          │
- │ (Lit/Angular/    │◄──A2UI──────┤          │
- │  Flutter)        │  DataPart   │          │
- └──────────────────┘  json+a2ui  │          │
-                     ┌────────────▼──┐  ┌────▼──────────┐  ┌───────────────┐
-                     │ CATALOG AGENT │  │ BUILDER AGENT │  │ RENDER AGENT  │
-                     │ (Cloud Run)   │  │ (Cloud Run)   │  │ (Cloud Run)   │
-                     │ models,       │  │ create_dash,  │  │ inline PNG,   │
-                     │ explores,     │  │ tiles, filters│  │ SSO embed URL │
-                     │ fields,       │  │ 24-col layout │  │               │
-                     │ previews      │  │               │  │               │
-                     └───────┬───────┘  └───────┬───────┘  └───────┬───────┘
-                             │    Looker SDK 4.0 (HTTPS)           │
-                             └───────────────┬────────────────────┘
-                                     ┌───────▼────────┐
-                                     │   Looker API    │
-                                     │ (LookML semantic│
-                                     │ layer = govern.)│
-                                     └────────────────┘
-```
 
-### The four agents
+### Responsibilities
 
-| Agent | Runtime | Role | Tools (Looker SDK) |
+| Agent | Runtime | Responsibility | Main tools (Looker SDK) |
 |---|---|---|---|
-| **Orchestrator** | Agent Engine (+ optional Cloud Run for A2A/A2UI) | Understands the request, assembles the `DashboardSpec`, delegates via A2A, asks for confirmations | — (`RemoteA2aAgent` sub-agents only) |
-| **Catalog** | Cloud Run (A2A, internal ingress) | Authority over the semantic model: exact `view.field` names, validation, previews | `all_lookml_models`, `lookml_model_explore`, `run_inline_query`, `search_dashboards` |
-| **Builder** | Cloud Run (A2A, internal ingress) | **Materializes** the native dashboard | `create_dashboard`, `create_query`, `create_dashboard_element`, `create_dashboard_filter`, layout components |
-| **Render/QA** | Cloud Run (A2A, internal ingress) | Visual verification and delivery | `create_dashboard_render_task` (PNG→ADK artifact), `create_sso_embed_url` |
+| **Orchestrator** | Agent Engine (+ optional Cloud Run for A2A/A2UI) | Interprets the request, negotiates the specification (`DashboardSpec`) with the user, delegates to specialists, manages confirmations | — (consumes `RemoteA2aAgent` sub-agents) |
+| **Catalog** | Cloud Run (A2A, internal ingress) | Read-only authority over the semantic model: resolves models, explores, and exact `view.field` names; validates specifications with real previews | `all_lookml_models`, `lookml_model_explore`, `run_inline_query`, `search_dashboards` |
+| **Builder** | Cloud Run (A2A, internal ingress) | The only write path: materializes the native dashboard and its components | `create_dashboard`, `create_query`, `create_dashboard_element`, `create_dashboard_filter`, layout components |
+| **Render/QA** | Cloud Run (A2A, internal ingress) | Closes the loop: visual verification of the result and delivery of interactive access | `create_dashboard_render_task` (PNG → ADK artifact), `create_sso_embed_url` |
 
-### Design decisions
+### Lifecycle of a request
 
-- **A2A between agents.** Each specialist is an independent A2A server (ADK's `to_a2a()`) with a discoverable AgentCard; the orchestrator consumes them as `RemoteA2aAgent`. You can scale, version, or replace a specialist without touching the rest (even with an agent from another framework that speaks A2A).
-- **A2UI toward the user.** The orchestrator advertises the A2UI extension in its AgentCard and emits declarative blueprints (spec wizard, preview, destructive confirmations) as `DataPart application/json+a2ui`. The frontend renders them with native components — never HTML or executable code crossing the trust boundary. See `frontend/README.md`.
-- **Two surfaces, one logic.** Gemini Enterprise doesn't render A2UI, so there the experience gracefully degrades to text + inline images (PNGs are stored as **ADK artifacts**, never passing through the model's text) + signed links. The `A2UI_ENABLED` flag controls the contract per surface.
-- **The Catalog Agent is the anti-hallucination barrier.** The Builder only uses fields the Catalog validated against LookML (`list_fields` + `preview_query`). Governance keeps living in LookML.
-- **Swappable model.** `AGENT_MODEL_PROVIDER` (gemini | claude | claude_native | anthropic) in `agents/common/model_factory.py`, per agent if you want (e.g., Gemini Flash for the catalog, Claude for the orchestrator). For the Claude-on-Vertex routes, enable the model in Model Garden and set `claude_location`.
-- **Signed links in a separate tool** (`create_sso_embed_url`): producing the link never blocks the render.
+```mermaid
+sequenceDiagram
+    actor U as User
+    participant O as Orchestrator
+    participant C as Catalog
+    participant B as Builder
+    participant R as Render
 
----
+    U->>O: natural-language request
+    O->>C: resolve explore and fields
+    C-->>O: exact view.field names + preview_query
+    O->>U: proposed DashboardSpec
+    U->>O: confirmation
+    O->>B: build the specification
+    Note over B: create_dashboard → add_tile×N →<br/>filters → layout
+    B-->>O: dashboard_id + url
+    O->>R: verify and deliver
+    R-->>O: PNG (ADK artifact) + signed SSO link
+    O->>U: native dashboard ready in Looker
+```
 
-## Structure
+The read/validation (Catalog) — write (Builder) — verification (Render) separation is not cosmetic: it bounds each agent's blast radius, allows the write path to be audited in isolation, and enables distinct IAM and network policies per responsibility.
+
+## 3. Protocols: A2A and A2UI
+
+**A2A (Agent2Agent)** is the contract between the orchestrator and the specialists. Each specialist publishes its `AgentCard` at `/.well-known/agent-card.json` and serves JSON-RPC over HTTP; the orchestrator discovers and consumes them as ADK `RemoteA2aAgent`s. The practical consequences: each agent is versioned, scaled, and deployed independently; a specialist can be reimplemented in another framework (LangGraph, a custom service) without touching the rest, as long as it honors the protocol; and the system stays open to third-party agents that speak A2A.
+
+**A2UI** is the contract between the orchestrator and the interface. Instead of returning HTML or code, the agent emits declarative component *blueprints* (JSON with a data model and bindings) traveling as `DataPart`s with MIME `application/json+a2ui` over the same A2A connection. The host renders them with its own native components, which keeps executable code out of the agent→UI channel (relevant to the trust boundary, see §5) and makes the same response portable across renderers (Lit, Angular, Flutter). The orchestrator advertises the A2UI extension in its AgentCard; the UI contract (spec wizard, preview card, destructive confirmations) is injected into the system prompt via `A2uiSchemaManager` only when `A2UI_ENABLED=true`.
+
+## 4. Design decisions
+
+**The Catalog Agent as the anti-hallucination barrier.** The dominant risk of a system that writes BI content is building tiles on nonexistent or misremembered fields. The system's rule is that the Builder only accepts fields with an exact `view.field` name previously resolved by the Catalog against LookML, and that every specification is validated with at least one real `preview_query` before being materialized. The model never "remembers" the schema: it queries it.
+
+**Two surfaces, one logic.** Gemini Enterprise does not render A2UI; the custom frontend does. Instead of forking agents, the difference is reduced to a per-deployment flag: in GE the experience is composed of text, inline images, and signed links; in the A2UI frontend, of wizards and interactive cards. The four agents and their tools are identical on both surfaces.
+
+**Images as artifacts, never as text.** Render PNGs are stored through the ADK artifacts mechanism (`tool_context.save_artifact`) and the runtime displays them inline. Bytes never pass through the model's text — it is the only reliable path in Gemini Enterprise and avoids bloated or truncated responses.
+
+**Swappable reasoning model.** The LLM backend is decided by configuration (`AGENT_MODEL_PROVIDER`), not by code, and can be set per agent:
+
+| Route | Backend | When to use it |
+|---|---|---|
+| `gemini` | Gemini on Vertex AI (direct ADK string) | Default; no extra requirements |
+| `claude` | Claude on Vertex AI via LiteLlm | Claude with GCP billing and residency |
+| `claude_native` | Claude on Vertex via ADK's native wrapper | Alternative when the GE↔LiteLlm streaming boundary misbehaves |
+| `anthropic` | Anthropic public API | When Model Garden enablement isn't available |
+
+A reasonable production mix: a fast, inexpensive model for the Catalog (high call volume, bounded task) and a higher-capability model for the orchestrator (negotiating the specification with the user).
+
+**Signed links in a separate tool.** `create_sso_embed_url` is independent of rendering: producing the interactive link never blocks nor depends on PNG generation, and vice versa.
+
+## 5. Security and governance
+
+- **Least privilege on GCP.** A single service account for the agents with four roles (`aiplatform.user`, `storage.objectAdmin`, `secretmanager.secretAccessor`, `logging.logWriter`). The deployer can operate with a granular set documented in `docs/`.
+- **Specialists not exposed.** Catalog, Builder, and Render deploy with internal ingress and only accept IAM-authenticated invocations (`roles/run.invoker` for the orchestrator's SA). The only optional public surface is the orchestrator's A2A/A2UI one.
+- **Looker credentials only in Secret Manager.** Never in versioned Terraform variables, images, or logs. Containers receive them as secret references, not values.
+- **Bounded scope in Looker.** The `LOOKER_MODELS` allowlist limits which LookML models are visible to the agents; `LOOKER_TARGET_FOLDER_ID` confines writes to a specific folder whose edit permission is controlled by the Looker administrator. The service user's permission set defines the real capability ceiling.
+- **Destructive operations require confirmation.** Dashboard deletion is a soft delete (Looker trash) and requires explicit user confirmation; on the A2UI surface, via a dedicated confirmation card.
+- **Trust boundary at the UI.** A2UI guarantees that only declarative descriptions of components from a closed catalog travel from agent to interface — never HTML or scripts — eliminating the class of code-injection risks in the generative-UI channel.
+
+## 6. Repository structure
 
 ```
 agents/
@@ -76,7 +138,7 @@ agents/
 │   ├── agent_engine_app.py  #   Agent Engine entrypoint (AdkApp)
 │   └── __main__.py          #   A2A+A2UI server (Cloud Run, custom frontend)
 ├── catalog_agent/     # semantic discovery (read)
-├── builder_agent/     # dashboard creation (write) ← the heart of self-service
+├── builder_agent/     # dashboard creation (write)
 ├── render_agent/      # inline PNG (artifacts) + SSO embed
 └── cloudbuild.yaml    # per-agent build (context shared with common/)
 
@@ -95,19 +157,34 @@ frontend/README.md       # how to connect an A2UI renderer (Lit/Angular/Flutter/
 docs/                    # prerequisites for approval (client/vendor)
 ```
 
----
+## 7. Configuration
 
-## Prerequisites
+Relevant environment variables (injected by Terraform; listed for operations and debugging):
 
-- GCP project with billing; Owner role (or equivalent); authenticated `gcloud`; Terraform ≥ 1.7; `python3`.
-- A **Looker** instance with API credentials (Client ID/Secret) whose role includes `access_data`, `explore` **and dashboard write permissions** (`create_dashboards` / `manage_dashboards` on the target folder) + a model set with your models.
+| Variable | Scope | Description |
+|---|---|---|
+| `AGENT_MODEL_PROVIDER` | all | `gemini` \| `claude` \| `claude_native` \| `anthropic` |
+| `GEMINI_MODEL` / `CLAUDE_MODEL` | all | Model identifier per route |
+| `CLAUDE_LOCATION` | all | Vertex region serving Claude (e.g., `us-east5`) |
+| `LOOKERSDK_BASE_URL` | all | Looker API URL |
+| `LOOKERSDK_CLIENT_ID` / `_SECRET` | all | Secret Manager references |
+| `LOOKER_MODELS` | all | JSON allowlist of LookML models |
+| `LOOKER_TARGET_FOLDER_ID` | builder | Target folder for created dashboards |
+| `A2UI_ENABLED` | orchestrator | Enables the A2UI contract in the system prompt |
+| `CATALOG/BUILDER/RENDER_AGENT_URL` | orchestrator | Specialists' A2A endpoints |
+| `PUBLIC_URL` | specialists | URL advertised by the AgentCard (Cloud Run) |
+
+## 8. Prerequisites
+
+- GCP project with billing; Owner role or the documented granular set; authenticated `gcloud`; Terraform ≥ 1.7; `python3`.
+- A **Looker** instance with API credentials for a service user whose permission set includes `access_data`, `explore`, and **dashboard write** (`create_dashboards` / `manage_dashboards` on the target folder), plus a model set with the authorized models.
 - **SSO Embed enabled** in Looker (Admin → Embed) for the interactive links.
-- A **Gemini Enterprise** app created (you need its `AS_APP` id).
+- A **Gemini Enterprise** app created (its `AS_APP` id and location are required).
 - For Claude routes: model enabled in **Vertex AI Model Garden** (or `ANTHROPIC_API_KEY` for the `anthropic` route).
 
-The full detail, organized by responsible team and with a signature sheet, lives in `docs/prerrequisitos_looker_selfservice_agents.docx`.
+The full detail, organized by responsible team and with a client/vendor signature sheet, lives in `docs/prerrequisitos_looker_selfservice_agents.docx`.
 
-## Deployment
+## 9. Deployment
 
 ```bash
 cd terraform
@@ -117,32 +194,48 @@ terraform plan
 terraform apply
 ```
 
-Order Terraform resolves: APIs → SA/IAM → bucket → secrets → image builds (Cloud Build) → 3 internal Cloud Run services → orchestrator A2A surface → packaging + Reasoning Engine → GE registration (`register_agent.sh`).
+Order Terraform resolves: APIs → SA/IAM → bucket → secrets → image builds (Cloud Build) → 3 internal Cloud Run services → orchestrator A2A surface → packaging + Reasoning Engine → Gemini Enterprise registration (`register_agent.sh`).
 
-> **Honest caveats:**
-> 1. `google_vertex_ai_reasoning_engine` is recent in `google-beta`: verify the nested `spec` names against your provider version. If your version doesn't yet support ADK source packaging, use `scripts/deploy_agent_engine.py` (same end state) and pass the engine id to `register_agent.sh`.
-> 2. GE registration is **not idempotent** (no native resource yet): re-applying may duplicate the agent.
+> **Caveats:**
+> 1. `google_vertex_ai_reasoning_engine` is recent in `google-beta`: verify the nested `spec` names against your provider version. If your version doesn't yet support ADK source packaging, `scripts/deploy_agent_engine.py` reaches the same end state via SDK; pass the resulting engine id to `register_agent.sh`.
+> 2. Gemini Enterprise registration is not idempotent (no native Terraform resource yet): re-applying may duplicate the agent in the app.
 > 3. The `requirements.txt` pins are for reference: pin the exact versions you validate in your build so build and runtime match.
 
-## End-to-end test (in Gemini Enterprise)
+## 10. Example flow
+
+Request in Gemini Enterprise:
 
 > "I want an e-commerce sales dashboard: revenue by month, top 10 countries by orders, average ticket as a single value, and a table of orders by status. Global filter by country."
 
-1. The orchestrator delegates to the **Catalog**: resolves `thelook/order_items`, validates `orders.created_month`, `order_items.total_revenue`, etc., and runs a `preview_query`.
-2. It proposes the `DashboardSpec` and waits for your confirmation.
-3. The **Builder** executes: `create_dashboard` → 4× `add_tile` → `add_dashboard_filter` + `wire_filter_to_tiles` → `apply_grid_layout(2)`.
-4. The **Render** shows you the inline PNG and the signed SSO link.
-5. You open the dashboard in Looker: it's native, editable, yours.
+1. The orchestrator delegates to the **Catalog**: resolves `thelook/order_items`, obtains the exact names (`orders.created_month`, `order_items.total_revenue`, …), and runs a validation `preview_query`.
+2. It proposes the `DashboardSpec` (title, four tiles with fields and visualization type, global filter, two-column layout) and waits for confirmation.
+3. The **Builder** executes the sequence `create_dashboard` → 4× `add_tile` → `add_dashboard_filter` + `wire_filter_to_tiles` → `apply_grid_layout(2)` and returns the `dashboard_id` and URL.
+4. The **Render** delivers the inline PNG and the signed SSO link.
+5. The dashboard lands in the Looker target folder: native, editable, shareable.
 
-In the A2UI frontend, steps 1–2 are an **interactive wizard** (explore/field/chart selects) and step 4 a **preview Card** with buttons — same agents, zero duplicated logic.
+On the A2UI frontend, steps 1–2 are presented as an interactive wizard (explore, field, and chart-type selection) and step 4 as a preview card with actions — same agents, no duplicated logic.
 
-## Quick troubleshooting
+## 11. Operations and troubleshooting
 
-- **"cannot access data"** → almost always the Looker API credentials' role (permission set + model set). `list_models` tells you what it can actually reach.
-- **The builder fails creating tiles** → `create_dashboards`/`manage_dashboards` missing from the permission set, or `looker_target_folder_id` isn't writable by the API user.
-- **Claude works via direct `stream_query` but GE returns an empty response** → GE↔LiteLlm streaming boundary: try `claude_native`, or `gemini` for the agent facing GE (specialists can stay on Claude).
-- **"Environment variable 'GOOGLE_CLOUD_PROJECT' is reserved"** → Agent Engine sets it itself; that's why we use `VERTEXAI_PROJECT`/`VERTEXAI_LOCATION`.
-- **A specialist's AgentCard advertises localhost** → check `PUBLIC_URL` in the Cloud Run revision.
+| Symptom | Likely cause and action |
+|---|---|
+| `cannot access data` | Insufficient permission set or model set on the Looker API credentials. `list_models` shows the actual reach. |
+| The Builder fails creating tiles | `create_dashboards`/`manage_dashboards` missing, or `LOOKER_TARGET_FOLDER_ID` not writable by the service user. |
+| Claude answers via direct `stream_query` but GE returns empty | GE↔LiteLlm streaming boundary. Switch to `claude_native`, or `gemini` on the GE-facing agent (specialists can stay on Claude). |
+| `Environment variable 'GOOGLE_CLOUD_PROJECT' is reserved` | Agent Engine sets that variable itself; the project uses `VERTEXAI_PROJECT`/`VERTEXAI_LOCATION` precisely for that reason. |
+| A specialist's AgentCard advertises `localhost` | `PUBLIC_URL` missing or wrong in the Cloud Run revision. |
+| Render times out | Looker render service saturated or disabled; check render tasks on the instance. |
+
+Observability: all four agents write to Cloud Logging (`logging.logWriter` role); ADK traces can be enabled in `agent_engine_app.py` (`enable_tracing=True`) for inspection in Cloud Trace.
+
+## 12. Planned evolution
+
+The project's `bi-` prefix is deliberate: the architecture is coupled to Looker only in the specialists' tools. Natural extensions, each as a new A2A agent without touching the existing ones:
+
+- **LookML Author Agent** — propose new dimensions/measures as pull requests to the LookML repository, closing the governance loop when the catalog doesn't cover a request.
+- **Scheduler Agent** — alerts and scheduled deliveries (`create_scheduled_plan`) on the created dashboards.
+- **Specialists for other backends** — an equivalent Builder for another BI platform would reuse the orchestrator, the A2UI contract, and the Catalog/Builder/Render pattern in full.
+- **Continuous evaluation** — a battery of reference requests against a staging environment to measure quality regressions when switching model or agent version.
 
 ## Author
 
