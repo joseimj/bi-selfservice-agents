@@ -171,6 +171,52 @@ def delete_dashboard(dashboard_id: str) -> str:
     return json.dumps({"soft_deleted": dashboard_id})
 
 
+def create_dashboard_from_template(template_id: str, params: dict,
+                                   folder_id: str = "") -> str:
+    """Materializa un dashboard desde un template organizacional.
+
+    params: valores para los placeholders del template (campos view.field ya
+    validados por el Catalog Agent). Ejecuta la secuencia completa:
+    dashboard -> tiles -> filtros (cableados) -> layout.
+    """
+    from common import templates
+    t = templates.load_dashboard_template(template_id)
+    params = templates.apply_defaults(t, params)
+    missing = templates.missing_params(t, params)
+    if missing:
+        return json.dumps({"error": "Faltan parámetros del template",
+                           "missing_params": missing})
+    spec = templates.render_placeholders(t["spec"], params)
+
+    created = json.loads(create_dashboard(
+        title=spec["title"].strip(), description=spec.get("description", ""),
+        folder_id=folder_id))
+    dash_id = created["dashboard_id"]
+
+    tiles = []
+    for tile in spec.get("tiles", []):
+        r = json.loads(add_tile(
+            dashboard_id=dash_id, title=tile["title"],
+            model=params["model"], explore=params["explore"],
+            fields=tile["fields"], vis_type=tile.get("vis_type", "looker_column"),
+            filters=tile.get("filters"), sorts=tile.get("sorts"),
+            limit=int(tile.get("limit", 500))))
+        tiles.append({"title": tile["title"], **r})
+
+    for f in spec.get("filters", []):
+        add_dashboard_filter(dashboard_id=dash_id, name=f["name"],
+                             model=params["model"], explore=params["explore"],
+                             dimension=f["dimension"],
+                             default_value=f.get("default_value", ""))
+        wire_filter_to_tiles(dashboard_id=dash_id, filter_name=f["name"],
+                             dimension=f["dimension"])
+
+    apply_grid_layout(dashboard_id=dash_id,
+                      columns_per_row=int(spec.get("layout_columns", 2)))
+    return json.dumps({"template": template_id, "dashboard_id": dash_id,
+                       "url": created["url"], "tiles": tiles}, ensure_ascii=False)
+
+
 ALL_TOOLS = [create_dashboard, add_tile, add_text_tile, add_dashboard_filter,
              wire_filter_to_tiles, apply_grid_layout, get_dashboard_spec,
-             delete_tile, delete_dashboard]
+             delete_tile, delete_dashboard, create_dashboard_from_template]

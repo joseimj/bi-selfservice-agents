@@ -1,0 +1,58 @@
+# Template organizacional de dashboard.
+# Gobernanza: este archivo se versiona en git; `terraform apply` lo publica
+# al bucket de templates. Los placeholders {{ ... }} los resuelve el
+# orquestador preguntando al usuario, y el Catalog Agent valida que los
+# campos existan antes de materializar.
+
+id: ventas_ejecutivo
+name: Tablero ejecutivo de ventas
+description: >
+  Vista estándar de ventas aprobada por Finanzas: tendencia mensual de
+  ingresos, ranking por país, ticket promedio y detalle por estado de orden.
+  Filtro global por país.
+
+params:
+  - name: model
+    description: Modelo LookML (p. ej. thelook)
+  - name: explore
+    description: Explore base (p. ej. order_items)
+  - name: dim_fecha_mes
+    description: Dimensión de mes (view.field)
+  - name: dim_pais
+    description: Dimensión de país (view.field)
+  - name: dim_estado
+    description: Dimensión de estado de la orden (view.field)
+  - name: met_ingresos
+    description: Medida de ingresos (view.field)
+  - name: met_ordenes
+    description: Medida de conteo de órdenes (view.field)
+  - name: met_ticket
+    description: Medida de ticket promedio (view.field)
+  - name: sufijo_titulo
+    description: Sufijo del título (área, región…)
+    default: ""
+
+spec:
+  title: "Ventas — Ejecutivo {{ sufijo_titulo }}"
+  description: "Generado desde el template organizacional ventas_ejecutivo"
+  layout_columns: 2
+  filters:
+    - name: País
+      dimension: "{{ dim_pais }}"
+  tiles:
+    - title: Ingresos por mes
+      vis_type: looker_line
+      fields: ["{{ dim_fecha_mes }}", "{{ met_ingresos }}"]
+      sorts: ["{{ dim_fecha_mes }}"]
+    - title: Top 10 países por órdenes
+      vis_type: looker_bar
+      fields: ["{{ dim_pais }}", "{{ met_ordenes }}"]
+      sorts: ["{{ met_ordenes }} desc"]
+      limit: 10
+    - title: Ticket promedio
+      vis_type: single_value
+      fields: ["{{ met_ticket }}"]
+    - title: Órdenes por estado
+      vis_type: looker_grid
+      fields: ["{{ dim_estado }}", "{{ met_ordenes }}", "{{ met_ingresos }}"]
+      sorts: ["{{ met_ordenes }} desc"]

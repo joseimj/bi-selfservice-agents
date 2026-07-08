@@ -15,6 +15,7 @@ locals {
     catalog = "catalog_agent"
     builder = "builder_agent"
     render  = "render_agent"
+    excel   = "excel_agent"
   }
 
   # Env vars comunes a todos los agentes
@@ -29,6 +30,9 @@ locals {
     LOOKER_MODELS        = var.looker_models
     LOOKER_TARGET_FOLDER_ID = var.looker_target_folder_id
     GOOGLE_GENAI_USE_VERTEXAI = "TRUE"
+    EXPORT_BUCKET             = google_storage_bucket.staging.name
+    TEMPLATES_BUCKET          = google_storage_bucket.staging.name
+    TEMPLATES_PREFIX          = "templates"
   }
 }
 
@@ -143,6 +147,7 @@ resource "google_cloud_run_v2_service" "orchestrator_a2a" {
           CATALOG_AGENT_URL = google_cloud_run_v2_service.specialist["catalog"].uri
           BUILDER_AGENT_URL = google_cloud_run_v2_service.specialist["builder"].uri
           RENDER_AGENT_URL  = google_cloud_run_v2_service.specialist["render"].uri
+          EXCEL_AGENT_URL   = google_cloud_run_v2_service.specialist["excel"].uri
         })
         content {
           name  = env.key

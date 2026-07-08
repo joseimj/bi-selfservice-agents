@@ -42,6 +42,13 @@ resource "google_project_iam_member" "agents_roles" {
   member  = "serviceAccount:${google_service_account.agents.email}"
 }
 
+# Firma de URLs v4 sin llave privada: la SA firma como sí misma vía IAM signBlob
+resource "google_service_account_iam_member" "agents_self_signer" {
+  service_account_id = google_service_account.agents.name
+  role               = "roles/iam.serviceAccountTokenCreator"
+  member             = "serviceAccount:${google_service_account.agents.email}"
+}
+
 # El service agent de Reasoning Engine necesita leer el paquete de staging
 resource "google_project_iam_member" "reasoning_engine_sa" {
   project = var.project_id
@@ -58,6 +65,17 @@ resource "google_storage_bucket" "staging" {
   location                    = var.region
   uniform_bucket_level_access = true
   force_destroy               = true
+
+  # Los exports de Excel caducan solos a los 7 días
+  lifecycle_rule {
+    action {
+      type = "Delete"
+    }
+    condition {
+      age            = 7
+      matches_prefix = ["exports/"]
+    }
+  }
 }
 
 # ---------------------------------------------------------------------------
@@ -87,4 +105,15 @@ resource "google_secret_manager_secret" "looker_client_secret" {
 resource "google_secret_manager_secret_version" "looker_client_secret" {
   secret      = google_secret_manager_secret.looker_client_secret.id
   secret_data = var.looker_client_secret
+}
+
+# ---------------------------------------------------------------------------
+# Templates organizacionales: se versionan en el repo (templates/) y cada
+# apply los publica al bucket. Gobernanza = pull request, no edición manual.
+# ---------------------------------------------------------------------------
+resource "google_storage_bucket_object" "org_templates" {
+  for_each = fileset("${path.module}/../templates", "**")
+  name     = "templates/${each.value}"
+  bucket   = google_storage_bucket.staging.name
+  source   = "${path.module}/../templates/${each.value}"
 }

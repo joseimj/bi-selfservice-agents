@@ -71,4 +71,23 @@ def preview_query(model: str, explore: str, fields: list[str], filters: dict | N
     return result if isinstance(result, str) else json.dumps(result)
 
 
-ALL_TOOLS = [list_models, list_explores, list_fields, search_dashboards, preview_query]
+def list_dashboard_templates() -> str:
+    """Lista los templates de dashboard aprobados por la organización."""
+    from common import templates
+    out = []
+    for name in templates.list_names("dashboards"):
+        t = templates.load_dashboard_template(name)
+        out.append({"id": t.get("id", name), "name": t.get("name"),
+                    "description": t.get("description"),
+                    "params": t.get("params", [])})
+    return json.dumps(out, ensure_ascii=False)
+
+
+def get_dashboard_template(template_id: str) -> str:
+    """Devuelve el spec completo de un template (con placeholders) para revisión."""
+    from common import templates
+    return json.dumps(templates.load_dashboard_template(template_id), ensure_ascii=False)
+
+
+ALL_TOOLS = [list_models, list_explores, list_fields, search_dashboards, preview_query,
+             list_dashboard_templates, get_dashboard_template]

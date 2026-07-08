@@ -45,16 +45,19 @@ flowchart TB
         CAT["Catalog Agent<br/>modèles, explores,<br/>champs, aperçus"]
         BLD["Builder Agent<br/>dashboards, tuiles,<br/>filtres, layout 24 col"]
         RND["Render Agent<br/>PNG inline,<br/>SSO embed URL"]
+        XLS["Excel Agent<br/>classeurs .xlsx,<br/>URL GCS signée"]
     end
 
     ORQ -- "A2A (JSON-RPC/HTTP)" --> CAT
     ORQ -- "A2A" --> BLD
     ORQ -- "A2A" --> RND
+    ORQ -- "A2A" --> XLS
 
     LKR["Looker API<br/>couche sémantique LookML = gouvernance"]
     CAT -- "Looker SDK 4.0" --> LKR
     BLD -- "Looker SDK 4.0" --> LKR
     RND -- "Looker SDK 4.0" --> LKR
+    XLS -- "Looker SDK 4.0" --> LKR
 ```
 
 ### Responsabilités
@@ -65,6 +68,7 @@ flowchart TB
 | **Catalog** | Cloud Run (A2A, ingress interne) | Autorité en lecture seule sur le modèle sémantique : résout modèles, explores et noms exacts `view.field` ; valide les spécifications avec des aperçus réels | `all_lookml_models`, `lookml_model_explore`, `run_inline_query`, `search_dashboards` |
 | **Builder** | Cloud Run (A2A, ingress interne) | L'unique chemin d'écriture : matérialise le dashboard natif et ses composants | `create_dashboard`, `create_query`, `create_dashboard_element`, `create_dashboard_filter`, layout components |
 | **Render/QA** | Cloud Run (A2A, ingress interne) | Boucle la boucle : vérification visuelle du résultat et livraison de l'accès interactif | `create_dashboard_render_task` (PNG → artifact ADK), `create_sso_embed_url` |
+| **Excel** | Cloud Run (A2A, ingress interne) | Livrables hors ligne : classeurs .xlsx mis en forme depuis des requêtes validées ou des dashboards existants ; livraison par URL GCS signée | `run_inline_query`/`run_query` + openpyxl, `export_query_to_excel`, `export_multi_sheet_excel`, `export_dashboard_to_excel` |
 
 ### Cycle de vie d'une demande
 
@@ -116,6 +120,8 @@ La séparation lecture/validation (Catalog) — écriture (Builder) — vérific
 
 Un mix de production raisonnable : un modèle rapide et économique pour le Catalog (fort volume d'appels, tâche bornée) et un modèle plus capable pour l'orchestrateur (négociation de la spécification avec l'utilisateur).
 
+**Templates organisationnels avant la conception libre.** Les dashboards et classeurs récurrents sont définis comme templates versionnés dans `templates/` (YAML paramétré avec des `{{ placeholders }}` pour les dashboards ; `.xlsx` de base avec branding pour Excel) que Terraform publie vers le bucket à chaque apply. L'orchestrateur les propose avant toute conception de zéro — la cohérence avant la créativité —, ne demande que les paramètres déclarés, le Catalog valide chaque champ et le Builder matérialise avec `create_dashboard_from_template`. Modifier un template est une pull request, pas une édition manuelle : la gouvernance du contenu récurrent vit dans le même cycle de revue que le code.
+
 **Liens signés dans un tool séparé.** `create_sso_embed_url` est indépendant du rendu : produire le lien interactif ne bloque jamais la génération du PNG et n'en dépend pas, et réciproquement.
 
 ## 5. Sécurité et gouvernance
@@ -140,6 +146,7 @@ agents/
 ├── catalog_agent/     # découverte sémantique (lecture)
 ├── builder_agent/     # création de dashboards (écriture)
 ├── render_agent/      # PNG inline (artifacts) + SSO embed
+├── excel_agent/       # classeurs .xlsx personnalisés (openpyxl + GCS signé)
 └── cloudbuild.yaml    # build par agent (contexte partagé avec common/)
 
 terraform/
@@ -155,6 +162,8 @@ terraform/
 
 frontend/README.md       # comment connecter un renderer A2UI (Lit/Angular/Flutter/CopilotKit)
 docs/                    # prérequis pour approbation (client/fournisseur)
+templates/               # templates organisationnels (dashboards/*.yaml, excel/*.xlsx)
+                         # versionnés dans git ; terraform apply les publie vers le bucket
 ```
 
 ## 7. Configuration
@@ -173,6 +182,8 @@ Variables d'environnement pertinentes (injectées par Terraform ; listées pour 
 | `A2UI_ENABLED` | orchestrateur | Active le contrat A2UI dans le system prompt |
 | `CATALOG/BUILDER/RENDER_AGENT_URL` | orchestrateur | Endpoints A2A des spécialistes |
 | `PUBLIC_URL` | spécialistes | URL annoncée par l'AgentCard (Cloud Run) |
+| `EXPORT_BUCKET` / `EXCEL_URL_EXPIRY_HOURS` | excel | Bucket des exports et expiration de l'URL signée (24 h par défaut ; nettoyage automatique à 7 jours) |
+| `TEMPLATES_BUCKET` / `TEMPLATES_PREFIX` | tous | Emplacement des templates organisationnels publiés par Terraform |
 
 ## 8. Prérequis
 
@@ -211,7 +222,7 @@ Demande dans Gemini Enterprise :
 2. Il propose le `DashboardSpec` (titre, quatre tuiles avec champs et type de visualisation, filtre global, mise en page à deux colonnes) et attend la confirmation.
 3. Le **Builder** exécute la séquence `create_dashboard` → 4× `add_tile` → `add_dashboard_filter` + `wire_filter_to_tiles` → `apply_grid_layout(2)` et renvoie le `dashboard_id` et l'URL.
 4. Le **Render** livre le PNG inline et le lien SSO signé.
-5. Le dashboard atterrit dans le dossier cible de Looker : natif, éditable, partageable.
+5. Le dashboard atterrit dans le dossier cible de Looker : natif, éditable, partageable. Un « et envoie-le-moi en Excel » ultérieur délègue à l'**Excel Agent**, qui exporte une feuille par tuile et renvoie l'URL signée de téléchargement.
 
 Sur le frontend A2UI, les étapes 1–2 se présentent comme un wizard interactif (sélection d'explore, de champs et de types de graphique) et l'étape 4 comme une carte d'aperçu avec actions — mêmes agents, aucune logique dupliquée.
 

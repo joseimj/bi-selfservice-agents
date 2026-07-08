@@ -23,3 +23,7 @@ output "orchestrator_a2a_url" {
 output "agents_service_account" {
   value = google_service_account.agents.email
 }
+
+output "excel_agent_url" {
+  value = google_cloud_run_v2_service.specialist["excel"].uri
+}

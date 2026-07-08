@@ -104,6 +104,10 @@ resource "google_vertex_ai_reasoning_engine" "orchestrator" {
         value = google_cloud_run_v2_service.specialist["render"].uri
       }
       env {
+        name  = "EXCEL_AGENT_URL"
+        value = google_cloud_run_v2_service.specialist["excel"].uri
+      }
+      env {
         name = "LOOKERSDK_CLIENT_ID"
         secret_ref {
           secret  = google_secret_manager_secret.looker_client_id.secret_id
