@@ -39,11 +39,11 @@ renderer = _remote(
 )
 
 sub_agents = [catalog, builder, renderer]
-if os.environ.get("EXCEL_AGENT_URL"):
+if os.environ.get("DELIVERABLES_AGENT_URL"):
     sub_agents.append(_remote(
-        "looker_excel_agent", "EXCEL_AGENT_URL",
-        "Genera archivos Excel (.xlsx) con formato a partir de queries de Looker "
-        "o de dashboards existentes; entrega por URL firmada de descarga.",
+        "looker_deliverables_agent", "DELIVERABLES_AGENT_URL",
+        "Puerta única de entregables (subcuadrilla de formatos): Excel/CSV, "
+        "presentaciones .pptx, Word .docx y PDF; devuelve URLs firmadas de descarga.",
     ))
 
 BASE_INSTRUCTION = """Flujo de autoservicio (siempre en este orden):
@@ -70,10 +70,10 @@ BASE_INSTRUCTION = """Flujo de autoservicio (siempre en este orden):
 6. VERIFICAR Y ENTREGAR (delega a looker_render_agent): pide el render inline para
    que el usuario lo vea, y el link SSO firmado para abrirlo interactivo.
 
-7. EXPORTAR (opcional, delega a looker_excel_agent si está disponible): si el
-   usuario pide el resultado "en Excel" o un entregable offline, exporta el
-   dashboard recién creado (export_dashboard_to_excel) o los queries validados
-   (export_query_to_excel / export_multi_sheet_excel) y comparte la URL firmada.
+7. EXPORTAR (opcional, delega a looker_deliverables_agent si está disponible):
+   si el usuario pide un entregable offline — Excel, CSV, presentación, Word o
+   PDF — delega al Deliverables Agent con el dashboard_id o los queries
+   validados y el formato pedido, y comparte las URLs firmadas que devuelva.
 
 Reglas:
 - Nunca inventes nombres de campos: solo los que devuelva el Catalog Agent.

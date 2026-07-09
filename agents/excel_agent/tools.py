@@ -106,27 +106,7 @@ def _finish_workbook(wb: Workbook) -> bytes:
 # ---------------------------------------------------------------------------
 # Entrega: GCS + URL firmada v4
 # ---------------------------------------------------------------------------
-def _upload_and_sign(data: bytes, filename: str) -> str:
-    import google.auth
-    from google.auth.transport import requests as ga_requests
-    from google.cloud import storage
-
-    bucket_name = os.environ["EXPORT_BUCKET"]
-    creds, _ = google.auth.default()
-    creds.refresh(ga_requests.Request())
-    client = storage.Client(credentials=creds)
-    blob = client.bucket(bucket_name).blob(f"exports/{filename}")
-    blob.upload_from_string(
-        data, content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-    # Firma v4 sin llave privada: usa signBlob vía IAM (requiere
-    # roles/iam.serviceAccountTokenCreator de la SA sobre sí misma).
-    return blob.generate_signed_url(
-        version="v4",
-        expiration=datetime.timedelta(hours=SIGNED_URL_HOURS),
-        service_account_email=getattr(creds, "service_account_email", None),
-        access_token=creds.token,
-        method="GET",
-    )
+from common.delivery import upload_and_sign as _upload_and_sign  # noqa: E402
 
 
 def _run_query_rows(model: str, explore: str, fields: list[str],
@@ -207,5 +187,26 @@ def _xlsx_name(name: str) -> str:
     return f"{stem}_{stamp}.xlsx"
 
 
+def export_query_to_csv(model: str, explore: str, fields: list[str],
+                        filename: str, filters: dict | None = None,
+                        sorts: list[str] | None = None, limit: int = 100000) -> str:
+    """Exporta un query a CSV plano (intercambio con otros sistemas: cargas,
+    ETLs, proveedores que solo aceptan CSV). Sin formato; para entregables
+    con formato usa export_query_to_excel."""
+    sdk = get_sdk()
+    q = models40.WriteQuery(model=model, view=explore, fields=fields,
+                            filters=filters or {}, sorts=sorts or [], limit=str(limit))
+    raw = sdk.run_inline_query(result_format="csv", body=q)
+    data = raw.encode() if isinstance(raw, str) else raw
+    url = _upload_and_sign(data, _csv_name(filename))
+    return json.dumps({"download_url": url, "format": "csv",
+                       "expires_in_hours": SIGNED_URL_HOURS})
+
+
+def _csv_name(name: str) -> str:
+    from common.delivery import timestamped_name
+    return timestamped_name(name, ".csv")
+
+
 ALL_TOOLS = [export_query_to_excel, export_multi_sheet_excel,
-             export_dashboard_to_excel, list_excel_templates]
+             export_dashboard_to_excel, export_query_to_csv, list_excel_templates]

@@ -32,33 +32,9 @@ Este proyecto desplaza la frontera: el resultado de una conversación no es una 
 
 ## 2. Arquitectura
 
-```mermaid
-flowchart TB
-    GE["Gemini Enterprise<br/>texto + imágenes inline (artifacts) + enlaces SSO"]
-    FE["Frontend A2UI<br/>(Lit / Angular / Flutter)"]
-    ORQ["Orquestador · ADK LlmAgent<br/>Vertex AI Agent Engine<br/>modelo intercambiable: gemini · claude · claude_native · anthropic"]
+![Arquitectura de bi-selfservice-agents](docs/img/arquitectura.svg)
 
-    GE -- "Superficie 1 (empleados)" --> ORQ
-    FE <-->|"Superficie 2 · A2A + A2UI<br/>(DataPart application/json+a2ui)"| ORQ
-
-    subgraph ESP["Especialistas · Cloud Run · ingress interno · AgentCard en /.well-known/agent-card.json"]
-        CAT["Catalog Agent<br/>modelos, explores,<br/>campos, previews"]
-        BLD["Builder Agent<br/>dashboards, tiles,<br/>filtros, layout 24 col"]
-        RND["Render Agent<br/>PNG inline,<br/>SSO embed URL"]
-        XLS["Excel Agent<br/>workbooks .xlsx,<br/>URL firmada GCS"]
-    end
-
-    ORQ -- "A2A (JSON-RPC/HTTP)" --> CAT
-    ORQ -- "A2A" --> BLD
-    ORQ -- "A2A" --> RND
-    ORQ -- "A2A" --> XLS
-
-    LKR["Looker API<br/>capa semántica LookML = gobernanza"]
-    CAT -- "Looker SDK 4.0" --> LKR
-    BLD -- "Looker SDK 4.0" --> LKR
-    RND -- "Looker SDK 4.0" --> LKR
-    XLS -- "Looker SDK 4.0" --> LKR
-```
+*Proporciones del diagrama: cajas con razón ancho:alto ≈ φ (niveles) o φ² (barras), anchos por nivel en progresión Fibonacci ×8 (104 → 168 → 272 → 440). Fuente editable en `docs/img/arquitectura.svg`.*
 
 ### Responsabilidades
 
@@ -68,7 +44,12 @@ flowchart TB
 | **Catalog** | Cloud Run (A2A, ingress interno) | Autoridad de solo lectura sobre el modelo semántico: resuelve modelos, explores y nombres exactos `view.field`; valida especificaciones con previews reales | `all_lookml_models`, `lookml_model_explore`, `run_inline_query`, `search_dashboards` |
 | **Builder** | Cloud Run (A2A, ingress interno) | Única ruta de escritura: materializa el dashboard nativo y sus componentes | `create_dashboard`, `create_query`, `create_dashboard_element`, `create_dashboard_filter`, layout components |
 | **Render/QA** | Cloud Run (A2A, ingress interno) | Cierre del ciclo: verificación visual del resultado y entrega de acceso interactivo | `create_dashboard_render_task` (PNG → artifact ADK), `create_sso_embed_url` |
-| **Excel** | Cloud Run (A2A, ingress interno) | Entregables offline: workbooks .xlsx con formato desde queries validados o dashboards existentes; entrega por URL firmada de GCS | `run_inline_query`/`run_query` + openpyxl, `export_query_to_excel`, `export_multi_sheet_excel`, `export_dashboard_to_excel` |
+| **Deliverables** | Cloud Run (A2A, ingress interno) | Puerta única de entregables: enruta por formato a la subcuadrilla y consolida las URLs firmadas; pregunta una vez si el formato es ambiguo | — (consume a los 4 especialistas de formato vía `RemoteA2aAgent`) |
+| **Tabular (Excel/CSV)** | Cloud Run (A2A, ingress interno) | Workbooks .xlsx con formato (query, multi-hoja, dashboard) y CSV plano para intercambio con sistemas | openpyxl, `export_query_to_excel`, `export_multi_sheet_excel`, `export_dashboard_to_excel`, `export_query_to_csv` |
+| **Slides** | Cloud Run (A2A, ingress interno) | Presentaciones .pptx: portada + una lámina por tile (render PNG por query) con template corporativo | python-pptx, `create_query_render_task`, `export_dashboard_to_slides` |
+| **Docs** | Cloud Run (A2A, ingress interno) | Reportes .docx (sección por tile con imagen + muestra de datos) y documentos narrativos por secciones | python-docx, `export_dashboard_to_docx`, `create_document` |
+| **PDF** | Cloud Run (A2A, ingress interno) | Ruta nativa (render PDF de Looker, default) y ruta compuesta (portada + narrativa + anexo gráfico) | `create_dashboard_render_task(pdf)`, ReportLab, `compose_pdf_document` |
+| **Data Exports** | Cloud Run (A2A, ingress interno) | Formatos machine-readable para sistemas: JSON, Parquet y Avro con esquema de tipos derivado de LookML (no adivinado de los datos); tope 100k filas por API | pyarrow, fastavro, `export_query_to_json/parquet/avro` |
 
 ### Ciclo de vida de una petición
 
@@ -92,6 +73,8 @@ sequenceDiagram
     R-->>O: PNG (artifact ADK) + enlace SSO firmado
     O->>U: dashboard nativo listo en Looker
 ```
+
+Los entregables offline forman una **subcuadrilla de dos niveles**: el orquestador delega la intención ("mándamelo en slides") al Deliverables Agent, que enruta por formato al especialista correcto. El nivel intermedio se justifica con cuatro formatos — mantiene al orquestador ignorante de los detalles de cada uno — pero es deliberadamente el último nivel: la jerarquía no debe crecer a tres.
 
 La separación lectura/validación (Catalog) — escritura (Builder) — verificación (Render) no es cosmética: acota el radio de acción de cada agente, permite auditar la ruta de escritura de forma aislada y habilita políticas IAM y de red distintas por responsabilidad.
 
@@ -122,6 +105,8 @@ Una combinación razonable en producción: un modelo rápido y económico para e
 
 **Templates organizacionales antes que diseño libre.** Los dashboards y workbooks recurrentes se definen como templates versionados en `templates/` (YAML parametrizado con `{{ placeholders }}` para dashboards; `.xlsx` base con branding para Excel) que Terraform publica al bucket en cada apply. El orquestador los propone antes que un diseño desde cero — consistencia sobre creatividad —, pide solo los parámetros declarados, el Catalog valida cada campo y el Builder materializa con `create_dashboard_from_template`. Cambiar un template es un pull request, no una edición manual: la gobernanza del contenido recurrente queda en el mismo ciclo de revisión que el código.
 
+**Regla anti-sprawl: cuándo un agente y cuándo una tool.** Para que la subcuadrilla no crezca sin criterio, la regla es explícita: un formato nuevo de una familia existente es una **tool** en el agente de esa familia (CSV y JSON no merecieron agente propio); una **familia** nueva de entregables — con dependencias, postura de riesgo y ciclo de evolución propios — es un **agente** en la subcuadrilla (Slides, PDF, Data Exports); y un **destino de publicación** (tablas Iceberg en el lakehouse, Google Drive) no es un entregable sino una integración: agente aparte, fuera de deliverables, con su propio proceso de aprobación. El fan-out se mantiene acotado por nivel (raíz: 4; deliverables: 5) y la jerarquía no crece a tres niveles.
+
 **Enlaces firmados en tool separada.** `create_sso_embed_url` es independiente del render: producir el enlace interactivo nunca bloquea ni depende de la generación del PNG, y viceversa.
 
 ## 5. Seguridad y gobernanza
@@ -146,7 +131,12 @@ agents/
 ├── catalog_agent/     # descubrimiento semántico (lectura)
 ├── builder_agent/     # creación de dashboards (escritura)
 ├── render_agent/      # PNG inline (artifacts) + SSO embed
-├── excel_agent/       # workbooks .xlsx personalizados (openpyxl + GCS firmado)
+├── deliverables_agent/# enrutador de la subcuadrilla de formatos (A2A)
+├── excel_agent/       # tabular: .xlsx con formato + CSV (openpyxl)
+├── slides_agent/      # presentaciones .pptx (python-pptx + render por tile)
+├── docs_agent/        # documentos .docx (python-docx)
+├── pdf_agent/         # PDF nativo de Looker + compuesto (ReportLab)
+├── data_exports_agent/# JSON/Parquet/Avro con esquema desde LookML (pyarrow/fastavro)
 └── cloudbuild.yaml    # build por agente (contexto compartido con common/)
 
 terraform/
@@ -182,7 +172,9 @@ Variables de entorno relevantes (Terraform las inyecta; se listan para operació
 | `A2UI_ENABLED` | orquestador | Activa el contrato A2UI en el system prompt |
 | `CATALOG/BUILDER/RENDER_AGENT_URL` | orquestador | Endpoints A2A de los especialistas |
 | `PUBLIC_URL` | especialistas | URL que anuncia el AgentCard (Cloud Run) |
-| `EXPORT_BUCKET` / `EXCEL_URL_EXPIRY_HOURS` | excel | Bucket de exports y expiración de la URL firmada (default 24 h; limpieza automática a 7 días) |
+| `EXPORT_BUCKET` / `EXPORT_URL_EXPIRY_HOURS` | subcuadrilla | Bucket de exports y expiración de las URLs firmadas (default 24 h; limpieza automática a 7 días) |
+| `EXCEL/SLIDES/DOCS/PDF/DATA_AGENT_URL` | deliverables | Endpoints A2A de los especialistas de formato |
+| `DELIVERABLES_AGENT_URL` | orquestador | Puerta única de la subcuadrilla de entregables |
 | `TEMPLATES_BUCKET` / `TEMPLATES_PREFIX` | todos | Ubicación de los templates organizacionales publicados por Terraform |
 
 ## 8. Prerrequisitos
@@ -222,7 +214,7 @@ Petición en Gemini Enterprise:
 2. Propone el `DashboardSpec` (título, cuatro tiles con campos y tipo de visualización, filtro global, layout a dos columnas) y espera confirmación.
 3. El **Builder** ejecuta la secuencia `create_dashboard` → 4× `add_tile` → `add_dashboard_filter` + `wire_filter_to_tiles` → `apply_grid_layout(2)` y devuelve `dashboard_id` y URL.
 4. El **Render** entrega el PNG inline y el enlace SSO firmado.
-5. El dashboard queda en el folder destino de Looker: nativo, editable y compartible. Un «y mándamelo en Excel» posterior delega al **Excel Agent**, que exporta una hoja por tile y devuelve la URL firmada de descarga.
+5. El dashboard queda en el folder destino de Looker: nativo, editable y compartible. Un «y mándamelo en Excel y en slides para el comité» posterior delega al **Deliverables Agent**, que enruta a los especialistas de formato y consolida las URLs firmadas de descarga.
 
 En el frontend A2UI, los pasos 1–2 se presentan como un wizard interactivo (selección de explore, campos y tipos de gráfico) y el paso 4 como una tarjeta de preview con acciones — mismos agentes, sin lógica duplicada.
 
@@ -243,6 +235,9 @@ Observabilidad: los cuatro agentes escriben a Cloud Logging (rol `logging.logWri
 
 El prefijo `bi-` del proyecto es deliberado: la arquitectura no está acoplada a Looker más que en las tools de los especialistas. Extensiones naturales, cada una como un nuevo agente A2A sin tocar los existentes:
 
+- **Ruta de gran volumen para Data Exports** — sobre ~100k filas, delegar a BigQuery el `EXPORT DATA (format='PARQUET')` usando el SQL que Looker genera para el query: los datos no pasan por el agente y la gobernanza se preserva (el SQL nace de LookML). Requiere `bigquery.jobUser` y lectura del dataset.
+- **Fuera de alcance por diseño**: publicación a formatos de *tabla* (Iceberg/BigLake). No son entregables sino destinos; pertenecerían a un Data Publisher Agent con proceso de aprobación propio, no a la subcuadrilla.
+- **Salida a Google Workspace** — cada especialista de formato puede ofrecer, además del archivo descargable, su equivalente colaborativo (Google Sheets/Slides/Docs vía API) entregado como enlace en Drive; requiere resolver scopes de la service account y el Drive compartido destino.
 - **LookML Author Agent** — proponer nuevas dimensiones/medidas como pull requests al repositorio LookML, cerrando el ciclo de gobernanza cuando el catálogo no cubre una petición.
 - **Scheduler Agent** — alertas y entregas programadas (`create_scheduled_plan`) sobre los dashboards creados.
 - **Especialistas para otros backends** — un Builder equivalente para otra plataforma de BI reutilizaría íntegros el orquestador, el contrato A2UI y el patrón Catalog/Builder/Render.

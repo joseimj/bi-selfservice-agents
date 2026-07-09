@@ -12,11 +12,21 @@ locals {
   registry = "${var.region}-docker.pkg.dev/${var.project_id}/${google_artifact_registry_repository.agents.repository_id}"
 
   specialist_agents = {
-    catalog = "catalog_agent"
-    builder = "builder_agent"
-    render  = "render_agent"
-    excel   = "excel_agent"
+    catalog      = "catalog_agent"
+    builder      = "builder_agent"
+    render       = "render_agent"
+    excel        = "excel_agent"
+    slides       = "slides_agent"
+    docs         = "docs_agent"
+    pdf          = "pdf_agent"
+    data         = "data_exports_agent"
+    deliverables = "deliverables_agent"
   }
+
+  # URLs determinísticas de Cloud Run: el Deliverables Agent necesita las de
+  # los especialistas de formato ANTES de que existan (mismo apply).
+  agent_url = { for k in keys(local.specialist_agents) :
+    k => "https://looker-${k}-agent-${var.project_number}.${var.region}.run.app" }
 
   # Env vars comunes a todos los agentes
   common_env = {
@@ -33,6 +43,12 @@ locals {
     EXPORT_BUCKET             = google_storage_bucket.staging.name
     TEMPLATES_BUCKET          = google_storage_bucket.staging.name
     TEMPLATES_PREFIX          = "templates"
+    # Subcuadrilla de formatos (las consume el Deliverables Agent)
+    EXCEL_AGENT_URL           = local.agent_url["excel"]
+    SLIDES_AGENT_URL          = local.agent_url["slides"]
+    DOCS_AGENT_URL            = local.agent_url["docs"]
+    PDF_AGENT_URL             = local.agent_url["pdf"]
+    DATA_AGENT_URL            = local.agent_url["data"]
   }
 }
 
@@ -147,7 +163,7 @@ resource "google_cloud_run_v2_service" "orchestrator_a2a" {
           CATALOG_AGENT_URL = google_cloud_run_v2_service.specialist["catalog"].uri
           BUILDER_AGENT_URL = google_cloud_run_v2_service.specialist["builder"].uri
           RENDER_AGENT_URL  = google_cloud_run_v2_service.specialist["render"].uri
-          EXCEL_AGENT_URL   = google_cloud_run_v2_service.specialist["excel"].uri
+          DELIVERABLES_AGENT_URL = google_cloud_run_v2_service.specialist["deliverables"].uri
         })
         content {
           name  = env.key

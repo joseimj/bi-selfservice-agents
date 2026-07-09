@@ -25,3 +25,17 @@ def allowed_models() -> list[str]:
         return json.loads(raw)
     except json.JSONDecodeError:
         return [m.strip() for m in raw.strip("[]").split(",") if m.strip()]
+
+
+def poll_render_task(sdk, task_id: str, timeout_s: int = 120) -> bytes:
+    """Espera un render task de Looker y devuelve los bytes del resultado."""
+    import time
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        t = sdk.render_task(render_task_id=task_id)
+        if t.status == "success":
+            return sdk.render_task_results(render_task_id=task_id)
+        if t.status == "failure":
+            raise RuntimeError(f"render task falló: {t.status_detail}")
+        time.sleep(3)
+    raise TimeoutError("render task no terminó a tiempo")

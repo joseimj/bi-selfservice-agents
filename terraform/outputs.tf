@@ -27,3 +27,8 @@ output "agents_service_account" {
 output "excel_agent_url" {
   value = google_cloud_run_v2_service.specialist["excel"].uri
 }
+
+output "deliverables_agent_url" {
+  description = "Puerta única de la subcuadrilla de formatos (Excel/CSV, Slides, Docs, PDF)"
+  value       = google_cloud_run_v2_service.specialist["deliverables"].uri
+}
